@@ -1,0 +1,18 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+.history/
+.workbuddy/
+
+# 加密令牌 / 任何本地凭据，绝不入库
+*.bin
+club_token.bin
+credentials.bin
+config.py
+
+# 本地调试与内部工作稿（禁止外发）
+_*.py
+outputs/
+*.log

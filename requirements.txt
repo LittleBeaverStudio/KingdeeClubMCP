@@ -1,0 +1,7 @@
+# 本技能**零第三方依赖**：MCP 走 urllib + json，SSE 手写解析，令牌加密用 ctypes 调 Windows DPAPI。
+# 所以这个文件里没有任何包名 —— 这是刻意的，不是忘了写。
+#
+# 为什么：财务同事的电脑经常是受控内网 / pip 源不通 / 装过别家 Python，
+# 一旦要求 pip install 就会卡在第一步。标准库能做的事，不引第三方依赖。
+#
+# 要求：Python 3.8 及以上。检查方式：python -c "import sys; print(sys.version)"
