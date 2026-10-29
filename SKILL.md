@@ -2,7 +2,7 @@
 name: kingdee-club
 slug: kingdee-club
 displayName: 金蝶云社区问答
-version: 1.0.0
+version: 1.0.1
 description: 连接金蝶云社区（vip.kingdee.com）官方 MCP：在对话里搜社区帖子与官方知识文档，查金蝶云星空 / 苍穹的报错原因、操作步骤、字段含义、版本已知问题，不用再开浏览器翻论坛。个人令牌用 Windows DPAPI 加密存本机（不写明文、不进对话、不进 mcp.json），支持 WorkBuddy / Cursor / Claude 等 8 种客户端。当用户问「金蝶报错 XX 怎么办」「这个功能怎么操作」时使用。
 license: 小河狸非转售许可 1.0（企业内部使用免费，转售收费需授权）
 ---
@@ -184,6 +184,7 @@ club_token.bin → DPAPI 密文，绑当前 Windows 用户
 | 4 | 网络 / 代理不可达 | 查网络、DNS、系统代理 |
 | 5 | 服务端错误 / 协议错误 | 稍后重试；持续失败看 `references/error-playbook.md` |
 | 6 | 工具执行返回错误 | 看返回文本，多半是参数不对 |
+| 7 | 该客户端没有固定配置文件 | 按打印出来的片段，在客户端的 MCP 面板里手动添加（如通义灵码） |
 
 ---
 

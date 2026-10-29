@@ -42,6 +42,7 @@ EXIT_TOKEN_REJECTED = 3
 EXIT_TRANSPORT = 4
 EXIT_SERVER = 5
 EXIT_TOOL = 6
+EXIT_MANUAL = 7
 
 EXIT_BY_KIND = {
     "token-missing": EXIT_TOKEN_MISSING,
@@ -268,7 +269,7 @@ def cmd_install_mcp(client_key: str, dry_run: bool) -> int:
     if path is None:
         print(f"[!] {meta['label']} 没有固定的配置文件路径，请在它的 MCP 面板里手动添加：", file=sys.stderr)
         _print_json(_config_doc(client_key))
-        return EXIT_SERVER
+        return EXIT_MANUAL
 
     if path.is_file():
         try:
@@ -397,7 +398,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="金蝶云社区 MCP 命令行（令牌走 DPAPI 密文，不落明文）",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="退出码：0 成功｜2 缺令牌｜3 令牌被拒｜4 网络｜5 服务端｜6 工具错误")
+        epilog="退出码：0 成功｜2 缺令牌｜3 令牌被拒｜4 网络｜5 服务端｜6 工具错误｜7 需在客户端里手动配置")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--check", action="store_true", help="只看本地状态，不联网")
     group.add_argument("--verify", action="store_true", help="连接自检（initialize + tools/list）")

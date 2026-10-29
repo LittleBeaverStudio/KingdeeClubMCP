@@ -27,8 +27,10 @@ from __future__ import annotations
 import argparse
 import getpass
 import os
+import queue
 import subprocess
 import sys
+import threading
 from datetime import datetime
 from pathlib import Path
 
@@ -239,31 +241,33 @@ def _gui() -> int:
         status_var.set(text)
         status.configure(foreground="#1a6d1a" if ok else "#b00020")
 
-    def test_connection(on_done=None) -> None:
+    def test_connection() -> None:
         token = _sanitize(token_var.get())
         problem = _validate(token)
         if problem:
             set_status(problem, ok=False)
-            if on_done:
-                on_done(False)
             return
         set_status("正在连接金蝶云社区…（最长 60 秒）")
         test_btn.configure(state="disabled")
 
-        def worker() -> None:
-            message, ok = _probe_connection(token, url_var.get().strip())
-            def finish() -> None:
-                set_status(message, ok=ok)
-                test_btn.configure(state="normal")
-                if on_done:
-                    on_done(ok)
-            try:
-                root.after(0, finish)
-            except Exception:  # noqa: BLE001 - 窗口已关
-                pass
+        # 后台线程只做网络请求，结果经队列回到主线程再碰 Tk —— Tk 不是线程安全的，
+        # 在子线程里直接 root.after / 改控件偶发会崩。
+        results: "queue.Queue[tuple[str, bool]]" = queue.Queue()
 
-        import threading
+        def worker() -> None:
+            results.put(_probe_connection(token, url_var.get().strip()))
+
+        def poll() -> None:
+            try:
+                message, ok = results.get_nowait()
+            except queue.Empty:
+                root.after(120, poll)
+                return
+            set_status(message, ok=ok)
+            test_btn.configure(state="normal")
+
         threading.Thread(target=worker, daemon=True).start()
+        root.after(120, poll)
 
     def save() -> None:
         token = _sanitize(token_var.get())
