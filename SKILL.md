@@ -2,7 +2,7 @@
 name: kingdee-club
 slug: kingdee-club
 displayName: 金蝶云社区问答
-version: 1.0.3
+version: 1.0.4
 description: 连接金蝶云社区（vip.kingdee.com）官方 MCP：在对话里搜社区帖子与官方知识文档，查金蝶云星空 / 苍穹的报错原因、操作步骤、字段含义、版本已知问题，不用再开浏览器翻论坛。个人令牌用 Windows DPAPI 加密存本机（不写明文、不进对话、不进 mcp.json）；用户回一句「令牌准备好了」，AI 就完成弹窗录入、连接自检与客户端接入，支持 WorkBuddy / Cursor / Claude 等 8 种客户端。
 license: 小河狸非转售许可 1.0（企业内部使用免费，转售收费需授权）
 examples_zh:
