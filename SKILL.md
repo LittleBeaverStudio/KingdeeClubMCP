@@ -2,9 +2,19 @@
 name: kingdee-club
 slug: kingdee-club
 displayName: 金蝶云社区问答
-version: 1.0.2
+version: 1.0.3
 description: 连接金蝶云社区（vip.kingdee.com）官方 MCP：在对话里搜社区帖子与官方知识文档，查金蝶云星空 / 苍穹的报错原因、操作步骤、字段含义、版本已知问题，不用再开浏览器翻论坛。个人令牌用 Windows DPAPI 加密存本机（不写明文、不进对话、不进 mcp.json）；用户回一句「令牌准备好了」，AI 就完成弹窗录入、连接自检与客户端接入，支持 WorkBuddy / Cursor / Claude 等 8 种客户端。
 license: 小河狸非转售许可 1.0（企业内部使用免费，转售收费需授权）
+examples_zh:
+  - "金蝶云星空结账提示『本期存在未记账凭证』怎么办？"
+  - "单据转换规则在哪里配？步骤说下"
+  - "这个字段是什么意思？"
+  - "升级到某版本有没有已知问题？"
+examples_en:
+  - "How do I fix the unposted-voucher error when closing the period?"
+  - "Where do I configure the document conversion rule?"
+  - "What does this field mean?"
+  - "Any known issues in the latest release?"
 ---
 
 # 金蝶云社区问答
@@ -58,7 +68,7 @@ license: 小河狸非转售许可 1.0（企业内部使用免费，转售收费�
 
 ---
 
-## 🚀 接入流程（agent 按这个走，用户不用敲命令）
+## 🚀 接入与使用（agent 按这个走，用户不用敲命令）
 
 ### 用户拿到令牌后
 
@@ -76,13 +86,12 @@ license: 小河狸非转售许可 1.0（企业内部使用免费，转售收费�
 python club_cli.py --setup
 ```
 
-这一条命令会依次做完三件事（`--setup` 是给 agent 用的入口）：
+这一条命令做两件事：
 
-1. **弹窗录令牌** —— 窗口会出现在用户屏幕上，里面**只有一个令牌输入框**（没有地址输入框）。
-   提示用户：按窗口里的三步（① 打开个人主页 → ② 编辑个人资料 → ③ 新建令牌）拿到令牌，
-   粘贴进输入框，点「保存」——**保存时会自动验证**，不通过会弹窗说明原因。
+1. **弹窗录令牌** —— 窗口会出现在用户屏幕上：上面是**社区网址**（可复制 / 可一键打开浏览器）和
+   **三步路径**（① 打开个人主页 → ② 编辑个人资料 → ③ 新建令牌），下面**只有一个令牌输入框**。
+   提示用户：按三步拿到令牌 → 粘贴 → 点「保存」（**保存时会自动验证**，不通过会弹窗说明）。
 2. **连接自检** —— 真实握手一次（`initialize` + `tools/list`），打印协议版本与工具清单。
-3. **写入 MCP 配置** —— 合并进 `~/.workbuddy/mcp.json`（**先自动备份**），条目里没有令牌。
 
 **运行提示**：这条命令会**阻塞**在窗口上，直到用户保存或取消。建议用后台方式起，然后轮询输出：
 
@@ -93,16 +102,52 @@ python club_cli.py --setup
 **结束时命令会打印一行机器可读摘要，按它判断：**
 
 ```
-SETUP_RESULT code=0 stage=ready saved=1 verified=1 installed=1 next=trust_and_restart
+SETUP_RESULT code=0 stage=ready saved=1 verified=1 installed=0 next=none
 ```
 
 | 摘要 | 含义 | 你该做什么 |
 |---|---|---|
-| `code=0 stage=ready` | 令牌已加密保存 + 自检通过 + 配置已写入 | 告诉用户：去**连接器 / MCP 页面**找到 `kingdee-club`，点【信任】或【启用】，然后重启客户端（这步只能人做） |
-| `code=10` | 用户取消 / 关窗 | **什么都没改**（没保存令牌、没写配置）。别重跑，问用户是否再来一次 |
+| `code=0 installed=0` | 令牌已加密保存 + 自检通过 | **直接开始用**：用户问什么，你就用下面第 2 步的方式检索社区 |
+| `code=0 installed=1` | 另外还写入了 MCP 配置 | 提醒用户去**连接器 / MCP 页面**点【信任】并重启客户端（见第 3 步） |
+| `code=10` | 用户取消 / 关窗 | **什么都没改**。别重跑，问用户是否再来一次 |
 | `code=2 / 3 / 4 / 5 / 6` | 令牌缺失 / 被拒 / 网络 / 服务端 / 工具 | 看下面的退出码表；**先修问题再重跑**，别盲目循环 |
 
-**已经配好的时候**再跑 `--setup`，会自动跳过弹窗（直接自检 + 写配置），不会重复打扰用户。
+### 第 2 步：日常怎么查社区（**默认模式，不需要点信任、不需要重启**）
+
+用户问「金蝶 XX 报错怎么办」「这个功能怎么操作」时，你直接跑：
+
+```bash
+python club_cli.py --search "结账 未记账凭证"
+```
+
+- `--search` 会**自动在服务端工具里挑搜索类工具并调用**（不写死工具名，服务端改名也能用）；
+- 需要精确控制参数时：先 `python club_cli.py --tools` 看清单，再
+  `python club_cli.py --call <工具名> --args '{...}'`；
+- 回答时**带上社区里的来源链接**，别把社区说法当成官方结论。
+
+> **为什么要多这一步？**
+> 注册成 MCP 服务 = 允许客户端启动一个**本地进程**（我们的桥脚本），按客户端的安全设计，
+> 这类自定义服务要由用户在连接器页确认一次（老版本还需重启，新版保存即生效）。
+> 所以**默认不注册 MCP**：日常查社区用上面的 `--search` 就够了 —— 功能完全一样，
+> 只是工具不在客户端列表里露脸，也省掉用户去找入口、点确认这一趟。
+
+### 第 3 步（可选）：让工具原生出现在客户端里
+
+只有用户明确要求「让它以工具形式出现在客户端的工具列表里」时才做：
+
+```bash
+python club_cli.py --setup --with-mcp
+```
+
+然后告诉用户（**路径要给准**）：
+
+> 打开**连接器管理页**（左侧栏「连接器」或对话输入框右侧的连接器入口）→ **右上角「自定义连接器」**
+> → 找到 `kingdee-club` → 确认启用。也可以直接编辑 `~/.workbuddy/mcp.json`。
+> **配置保存后即时生效**，一般不用重启；在对话框里展开「正在连接 MCP 服务」能看到已连接数。
+> 若界面弹出授权/信任确认，点一下即可 —— 那是客户端对"要启动一个本地进程"的安全确认，只有人能做。
+
+各客户端的配置文件位置与入口见 `references/mcp-clients.md`。
+（已经配好令牌时，再跑 `--setup` 会跳过弹窗，直接自检，不会重复打扰用户。）
 
 ### 用户想自己操作时
 
@@ -111,7 +156,7 @@ python setup_token.py          # 只弹令牌窗口（窗口里只有一个输�
 python setup_token.py --check  # 只看状态，不开窗、不联网
 python setup_token.py --delete # 删除已保存的令牌
 python club_cli.py --verify    # 只做连接自检
-python club_cli.py --install-mcp   # 只写 MCP 配置
+python club_cli.py --search "关键词"   # 直接检索社区
 ```
 
 **令牌从哪来**：打开 `vip.kingdee.com` → **① 打开个人主页 → ② 编辑个人资料 → ③ 新建令牌**
@@ -126,8 +171,9 @@ python club_cli.py --install-mcp   # 只写 MCP 配置
 | 3 | 令牌被拒（401/403） | 换一个新令牌；403 还要看该账号有没有该 MCP 的权限 |
 | 4 | 网络 / 代理不可达 | 查网络、DNS、系统代理 |
 | 5 | 服务端错误 / 协议错误 | 稍后重试；持续失败看 `references/error-playbook.md` |
-| 6 | 工具执行返回错误 | 看返回文本，多半是参数不对 |
+| 6 | 工具执行返回错误 | 看返回文本，多半是参数不对；`--search` 挑不到工具时也会是这个码 |
 | 7 | 该客户端没有固定配置文件 | 按打印出来的片段，在客户端的 MCP 面板里手动添加（如通义灵码） |
+| 10 | 用户取消录入窗口 | 什么都没改，别重跑 |
 
 ---
 
@@ -135,11 +181,13 @@ python club_cli.py --install-mcp   # 只写 MCP 配置
 
 | 命令 | 用途 |
 |---|---|
-| `python club_cli.py --setup` | **一步接入**：弹窗录令牌 → 自检 → 写 MCP 配置（agent 首选） |
+| `python club_cli.py --setup` | **一步接入**：弹窗录令牌 → 自检（agent 首选，默认不写 MCP 配置） |
+| `python club_cli.py --setup --with-mcp` | 再把 MCP 配置写进客户端（可选，需要用户点信任 + 重启） |
 | `python setup_token.py` | 打开令牌录入窗口（DPAPI 加密保存） |
 | `python setup_token.py --check / --delete` | 只看状态 / 删除已保存令牌 |
 | `python club_cli.py --check` | 本地状态：令牌、有效期、MCP 配置是否就绪（**不联网**） |
 | `python club_cli.py --verify` | 真实连接自检（initialize + tools/list） |
+| `python club_cli.py --search "关键词" [--top-k N]` | **一句话检索社区**（自动挑搜索工具，日常主力命令） |
 | `python club_cli.py --tools [--json]` | 列出服务端工具与参数 |
 | `python club_cli.py --call <工具> --args '{...}' [--json]` | 直接调用一个工具 |
 | `python club_cli.py --mcp-config [--client X]` | 生成 MCP 配置片段（不含令牌） |
@@ -186,7 +234,7 @@ python club_cli.py --install-mcp   # 只写 MCP 配置
 | `--verify` 报 401 `Malformed token` | 令牌粘错或已过期。重跑 `setup_token.py` 换新令牌（窗口里先点「测试连接」） |
 | `--verify` 报 403 | 账号没有该 MCP 服务权限，去社区确认令牌权限范围 |
 | `--verify` 报「域名解析失败 / 连接超时」 | 网络或公司代理。先 `curl https://vip.kingdee.com` 试试，必要时设 `HTTPS_PROXY` |
-| 客户端里看不到 `kingdee-club` 工具 | 没点「信任 / 启用」，或没重启客户端；WorkBuddy 在**连接器管理页**点「信任」 |
+| 客户端里看不到 `kingdee-club` 工具 | 走的是模式 B 但没确认：连接器管理页**右上角「自定义连接器」**→ 找到 kingdee-club → 确认启用；或在对话里展开「正在连接 MCP 服务」看它是不是没连上 |
 | 客户端报「MCP server failed to start」 | 跑 `python club_cli.py --doctor`，看桥脚本路径与 Python 路径是否存在（换过 Python 会失效，重跑 `--install-mcp`） |
 | 工具调用超时 | 社区检索偶尔较慢；桥对 `tools/call` 给到 180 秒，仍超时用 `--call` 单独重试看服务端原文 |
 | `--check` 显示「含明文令牌」 | 你之前按官方写法把令牌写进过 `mcp.json`；跑 `--install-mcp` 覆盖该条目，并**去社区重置令牌** |

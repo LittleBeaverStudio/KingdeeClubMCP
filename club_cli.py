@@ -291,11 +291,17 @@ def run_token_wizard() -> int:
     return done.returncode
 
 
-def cmd_setup(base_url: str | None, client_key: str, timeout: float | None) -> int:
-    """一条命令走完：录令牌 → 自检 → 写 MCP 配置。
+def cmd_setup(base_url: str | None, client_key: str, timeout: float | None,
+              with_mcp: bool = False) -> int:
+    """一条命令走完：录令牌 → 自检（→ 可选写 MCP 配置）。
 
     这是给 agent 用的入口：用户回一句「令牌准备好了」，agent 就跑这一条，
     不要让用户自己敲命令。最后打印 SETUP_RESULT 摘要，agent 按它判断。
+
+    默认**不写 MCP 配置** —— 因为注册成 MCP 服务后，用户还得去「连接器管理页 → 右上角
+    自定义连接器」确认一次（客户端对"要启动本地进程"的安全闸门），日常查社区用不到。
+    日常查社区用本技能自带的 `--search` / `--call` 就够了，不需要那两步。
+    用户明确要求"让工具原生出现在客户端里"时，才加 `--with-mcp`。
     """
     print("=" * 68)
     print("金蝶云社区 MCP · 一步接入")
@@ -337,23 +343,95 @@ def cmd_setup(base_url: str | None, client_key: str, timeout: float | None) -> i
                   f"stage=verify saved=1 verified=0 installed=0")
             return EXIT_BY_KIND.get(exc.kind, EXIT_SERVER)
 
-        # —— 第 3 步：接入客户端 ——
-        print("\n[3/3] 写入 MCP 配置")
-        rc = cmd_install_mcp(client_key, dry_run=False)
-        if rc != 0:
-            print(f"SETUP_RESULT code={rc} stage=install saved=1 verified=1 installed=0")
-            return rc
+        # —— 第 3 步（可选）：注册成 MCP 服务 ——
+        if with_mcp:
+            print("\n[3/3] 写入 MCP 配置")
+            rc = cmd_install_mcp(client_key, dry_run=False)
+            if rc != 0:
+                print(f"SETUP_RESULT code={rc} stage=install saved=1 verified=1 installed=0")
+                return rc
+            print("\n" + "=" * 68)
+            print("✅ 令牌已加密保存 · 连接自检通过 · MCP 配置已写入")
+            print("=" * 68)
+            print(f"配置文件：{CLIENTS[client_key]['path']}")
+            print("最后一步（只有人能做）：连接器管理页右上角「自定义连接器」→ 找到 kingdee-club → 确认启用。")
+            print("新版客户端保存即生效，一般不用重启；对话里展开「正在连接 MCP 服务」可看是否连上。")
+            print("SETUP_RESULT code=0 stage=ready saved=1 verified=1 installed=1 next=trust_and_restart")
+            return EXIT_OK
 
         print("\n" + "=" * 68)
-        print("✅ 令牌已加密保存 · 连接自检通过 · MCP 配置已写入")
+        print("✅ 令牌已加密保存 · 连接自检通过")
         print("=" * 68)
-        print(f"配置文件：{CLIENTS[client_key]['path']}")
-        print("最后一步需要你点一下：在客户端的「连接器 / MCP」页面找到 kingdee-club，")
-        print("点【信任】或【启用】，然后重启客户端 —— 这一步只有人能做。")
-        print("SETUP_RESULT code=0 stage=ready saved=1 verified=1 installed=1 next=trust_and_restart")
+        print("已经可以用了：以后直接问「金蝶 XX 报错怎么办」，我会用这个技能去社区检索。")
+        print("（想让它以「工具」形式出现在客户端里，再跑一次 python club_cli.py --setup --with-mcp，")
+        print("  但那需要你去连接器管理页右上角「自定义连接器」确认一次 —— 不做也能用。）")
+        print("SETUP_RESULT code=0 stage=ready saved=1 verified=1 installed=0 next=none")
         return EXIT_OK
     finally:
         os.environ.update(saved_env)
+
+
+SEARCH_NAME_HINTS = ("search", "knowledge", "query", "article", "post", "community", "list")
+QUERY_PARAM_HINTS = ("query", "keyword", "q", "question", "title", "text", "content", "search")
+LIMIT_PARAM_HINTS = ("top_k", "topk", "limit", "size", "count", "num", "page_size")
+
+
+def _pick_search_tool(tools: list) -> tuple[dict | None, str, str]:
+    """从服务端工具里挑一个"搜索类"的，返回 (工具, 查询参数名, 条数参数名)。
+
+    不写死工具名 —— 服务端升级可能改名，改名后这里会自动重新挑。
+    """
+    best, best_score = None, 0
+    for tool in tools:
+        name = (tool.get("name") or "").lower()
+        props = ((tool.get("inputSchema") or {}).get("properties") or {})
+        param = next((p for p in props if p.lower() in QUERY_PARAM_HINTS), None)
+        limit = next((p for p in props if p.lower() in LIMIT_PARAM_HINTS), None)
+        score = 0
+        if any(h in name for h in SEARCH_NAME_HINTS):
+            score += 3
+        if param:
+            score += 2
+        if limit:
+            score += 1
+        if score > best_score:
+            best, best_score = tool, score
+            if param and any(h in name for h in ("search", "knowledge")):
+                break
+    if not best:
+        return None, "", ""
+    props = ((best.get("inputSchema") or {}).get("properties") or {})
+    param = next((p for p in props if p.lower() in QUERY_PARAM_HINTS), "")
+    limit = next((p for p in props if p.lower() in LIMIT_PARAM_HINTS), "")
+    return best, param, limit
+
+
+def cmd_search(client: club_mcp.McpClient, keyword: str, top_k: int | None,
+              as_json: bool) -> int:
+    """一句自然语言关键词 → 自动挑搜索工具 → 直接调。给"不想配 MCP"的用法。"""
+    tools = client.list_tools()
+    tool, param, limit_param = _pick_search_tool(tools)
+    if tool is None:
+        print("[!] 服务端没有可用工具，先看 `python club_cli.py --tools`", file=sys.stderr)
+        client.close()
+        return EXIT_TOOL
+    if not param:
+        print(f"[!] 工具 {tool.get('name')} 没有可识别的查询参数，请改用 --call 精确调用。"
+              f"\n    可用工具：{', '.join(t.get('name', '?') for t in tools)}", file=sys.stderr)
+        client.close()
+        return EXIT_TOOL
+
+    arguments = {param: keyword}
+    if top_k and limit_param:
+        arguments[limit_param] = int(top_k)
+    result = client.call_tool(tool["name"], arguments)
+    client.close()
+    if as_json:
+        _print_json(result)
+    else:
+        text = club_mcp.result_text(result)
+        print(text or "（工具没有返回文本内容）")
+    return EXIT_OK
 
 
 def cmd_install_mcp(client_key: str, dry_run: bool) -> int:
@@ -405,8 +483,8 @@ def cmd_install_mcp(client_key: str, dry_run: bool) -> int:
 
     print(f"✅ 已写入 {path}")
     print(f"   {SERVER_KEY} = {sys.executable} {HERE / 'club_bridge.py'}")
-    print("   下一步：在客户端里【信任/启用】这个 MCP 服务（WorkBuddy 在连接器管理页点「信任」），"
-          "然后重启客户端。")
+    print("   下一步：连接器管理页右上角「自定义连接器」→ 找到 kingdee-club → 确认启用"
+          "（也可直接编辑该配置文件；新版保存即生效，一般不用重启）。")
     return EXIT_OK
 
 
@@ -497,6 +575,7 @@ def main() -> int:
     group.add_argument("--verify", action="store_true", help="连接自检（initialize + tools/list）")
     group.add_argument("--tools", action="store_true", help="列出服务端工具")
     group.add_argument("--call", metavar="TOOL", help="调用一个工具")
+    group.add_argument("--search", metavar="关键词", help="一句话检索社区（自动挑搜索工具）")
     group.add_argument("--mcp-config", action="store_true", help="生成 MCP 配置片段")
     group.add_argument("--install-mcp", action="store_true", help="合并写入 MCP 配置文件")
     group.add_argument("--setup", action="store_true",
@@ -504,12 +583,15 @@ def main() -> int:
     group.add_argument("--doctor", action="store_true", help="六步体检")
 
     parser.add_argument("--args", default="{}", help="--call 的参数（JSON 对象）")
+    parser.add_argument("--top-k", type=int, default=None, help="--search 的返回条数（服务端支持时）")
     parser.add_argument("--json", action="store_true", help="--tools / --call 输出原始 JSON")
     parser.add_argument("--client", default="workbuddy", choices=sorted(CLIENTS),
                         help="--mcp-config / --install-mcp 的目标客户端")
     parser.add_argument("--base-url", default=None, help="覆盖服务地址")
     parser.add_argument("--timeout", type=float, default=None, help="单次请求超时（秒）")
     parser.add_argument("--dry-run", action="store_true", help="--install-mcp 只打印不写文件")
+    parser.add_argument("--with-mcp", action="store_true",
+                        help="--setup 额外把 MCP 配置写进客户端（需在连接器页确认一次）")
     args = parser.parse_args()
 
     try:
@@ -522,7 +604,7 @@ def main() -> int:
         if args.install_mcp:
             return cmd_install_mcp(args.client, args.dry_run)
         if args.setup:
-            return cmd_setup(args.base_url, args.client, args.timeout)
+            return cmd_setup(args.base_url, args.client, args.timeout, args.with_mcp)
 
         client = club_mcp.McpClient(base_url=args.base_url, timeout=args.timeout or club_mcp.DEFAULT_TIMEOUT)
         if args.verify:
@@ -531,6 +613,8 @@ def main() -> int:
             return cmd_tools(client, args.json)
         if args.call:
             return cmd_call(client, args.call, args.args, args.json)
+        if args.search:
+            return cmd_search(client, args.search, args.top_k, args.json)
         parser.print_help()
         return EXIT_OK
     except club_mcp.ClubError as exc:
