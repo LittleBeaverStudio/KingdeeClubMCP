@@ -7,6 +7,8 @@
 [![Python](https://img.shields.io/badge/Python-3.8%2B-3776AB.svg)](https://www.python.org/)
 [![Deps](https://img.shields.io/badge/%E4%BE%9D%E8%B5%96-%E9%9B%B6%E7%AC%AC%E4%B8%89%E6%96%B9%E5%8C%85-brightgreen.svg)](#-为什么不用装依赖)
 
+<img src="KingdeeClubMCP.png" width="112" align="right" alt="金蝶云社区问答">
+
 # 金蝶云社区问答 Skill
 
 把**金蝶云社区（vip.kingdee.com）的官方 MCP** 接进你的 AI 客户端。
@@ -53,68 +55,44 @@
 
 ---
 
-## 🚀 三步开始
+## 🚀 怎么用：用户只回一句话，剩下的 AI 干
 
-### 1. 录入令牌（弹窗，明文不落盘）
+### 1. 拿到令牌（窗口里就能拿）
+
+令牌窗口里直接给了社区网址和三步路径：
+
+```
+社区网址  https://vip.kingdee.com   [复制] [打开]
+          ① 打开个人主页 → ② 编辑个人资料 → ③ 新建令牌
+```
+
+点「**打开**」直接跳浏览器，点「**复制**」把网址拿走。
+
+### 2. 告诉 AI「令牌准备好了」
+
+AI 收到这句就会自己跑：
 
 ```bash
-python setup_token.py
+python club_cli.py --setup
 ```
 
-窗口里粘贴令牌 → 点「**测试连接**」（当场验证）→「保存并关闭」。
+这一条命令依次做完三件事，**用户不用再敲任何命令**：
 
-- 🔒 DPAPI 加密，绑当前 Windows 用户；同机其它用户读不出，拷到别的机器解不开
-- 🔒 只显示尾 4 位，永不回显完整令牌；不写日志、不进对话
-- 🔒 存在技能目录**之外**，升级 / 重装 / 打包都带不走
-- 🔒 与「数据导出」的 `credentials.bin` 是两个文件，互不覆盖
+1. **弹窗录令牌** —— 屏幕上弹出一个窗口：**社区网址 → 三步路径 → 一个令牌输入框**，
+   底部只有「保存 / 取消」。粘贴令牌后点「保存」——**保存时会自动验证**，
+   令牌不对会**弹窗告诉你**（也可以选择先存着，回头再换）。
+2. **连接自检** —— 真实握手一次（`initialize` + `tools/list`），打印协议版本与可用工具。
+3. **写入 MCP 配置** —— 合并进 `~/.workbuddy/mcp.json`（**先自动备份**），条目里没有令牌。
 
-令牌在哪拿：登录 `vip.kingdee.com` → 个人设置 / 访问令牌 → 创建「个人访问令牌（PAT）」。
+最后 AI 只需要提醒你一件事：**去「连接器 / MCP」页面找到 kingdee-club，点【信任】，然后重启客户端**。
 
-没有图形环境？`python setup_token.py --console`（同样加密保存）。
-只看状态：`--check`；删掉：`--delete`。
+### 3. 之后就能直接问
 
-### 2. 自检
+「金蝶云星空结账提示未记账凭证怎么办？」—— AI 会自己去社区检索并给出处。
 
-```bash
-python club_cli.py --verify
-```
-
-```
-服务地址  : https://vip.kingdee.com/api/mcp
-令牌      : 加密凭据 club_token.bin（DPAPI）｜****9f2c
-有效期    : 有效期至 2027-04-12 10:00（剩 165 天）
-协议版本  : 2025-06-18
-服务端    : kingdee-club ...
-工具数量  : N
-  · ...
-✅ 连接正常。
-```
-
-### 3. 接进客户端
-
-```bash
-python club_cli.py --install-mcp                 # WorkBuddy（写入 ~/.workbuddy/mcp.json，自动备份）
-python club_cli.py --install-mcp --client cursor # 或 trae / kiro / windsurf / claude / vscode / lingma
-```
-
-生成的就是普通 stdio MCP 配置，**里面没有令牌**：
-
-```json
-{
-  "mcpServers": {
-    "kingdee-club": {
-      "command": "C:\\...\\python.exe",
-      "args": ["C:\\...\\kingdee-club\\club_bridge.py"]
-    }
-  }
-}
-```
-
-写完在客户端里点「**信任 / 启用**」，重启客户端。各客户端路径与入口见
-[references/mcp-clients.md](./references/mcp-clients.md)。
-
-> 不想改配置？直接用命令行：
-> `python club_cli.py --tools` 看工具清单 → `python club_cli.py --call <工具> --args '{"query":"..."}'`
+令牌用 **Windows 系统加密（DPAPI）** 保存在 `~/.workbuddy/kingdee/club_token.bin`：
+绑当前 Windows 用户，同机其它用户读不出，拷到别的机器解不开；
+**不写明文、不进对话、不落日志**，只显示尾 4 位。
 
 ---
 
@@ -160,6 +138,7 @@ club_token.bin  → DPAPI 密文（绑当前 Windows 用户）
 | 网络 | 只连 `vip.kingdee.com/api/mcp`（或你指定的 `--base-url`）；**不查更新、不报遥测** |
 | 写文件 | 只写 `club_token.bin` 和（`--install-mcp` 时的）MCP 配置；改配置前自动备份 |
 | 读文件 | 不读账套、Excel、发票；不碰 `credentials.bin` |
+| 浏览器 | 令牌窗口的「打开」按钮调起默认浏览器访问社区首页（**仅用户点击时**）；「复制」写入剪贴板 |
 | 日志 | 只写 stderr，且不含令牌；stdout 留给 MCP 协议 |
 | 子进程 | 仅在当前 Python 缺 tkinter 时，查找本机已装的另一个 Python 开窗（不装任何东西） |
 

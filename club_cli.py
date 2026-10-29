@@ -26,6 +26,7 @@ import os
 import platform
 import re
 import shutil
+import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -35,6 +36,14 @@ sys.path.insert(0, str(HERE))
 
 import club_mcp  # noqa: E402
 import clubstore  # noqa: E402
+
+# stdout 常被 agent 当成管道读（不是 tty），默认是块缓冲 —— 进度会憋在缓冲区里，
+# agent 轮询时看不到「窗口已打开」这类提示。改成行缓冲，逐行立刻可见。
+try:
+    sys.stdout.reconfigure(line_buffering=True)
+    sys.stderr.reconfigure(line_buffering=True)
+except (AttributeError, ValueError):  # 老 Python / 特殊 stdout
+    pass
 
 EXIT_OK = 0
 EXIT_TOKEN_MISSING = 2
@@ -263,6 +272,90 @@ def cmd_mcp_config(client_key: str, as_json_only: bool) -> int:
     return EXIT_OK
 
 
+def run_token_wizard() -> int:
+    """拉起令牌录入窗口（子进程），返回它的退出码。
+
+    为什么用子进程而不是直接调 `setup_token._gui()`：
+    `setup_token.py` 自带「当前解释器没有 tkinter 就换一个 Python 开窗」的逻辑，
+    走子进程才能复用它；子进程会把自己的 SETUP_RESULT 摘要打进同一份 stdout。
+    """
+    script = HERE / "setup_token.py"
+    if not script.is_file():
+        print(f"[!] 找不到令牌向导：{script}", file=sys.stderr)
+        return EXIT_SERVER
+    try:
+        done = subprocess.run([sys.executable, str(script)])
+    except OSError as exc:
+        print(f"[!] 启动令牌窗口失败：{exc}", file=sys.stderr)
+        return EXIT_SERVER
+    return done.returncode
+
+
+def cmd_setup(base_url: str | None, client_key: str, timeout: float | None) -> int:
+    """一条命令走完：录令牌 → 自检 → 写 MCP 配置。
+
+    这是给 agent 用的入口：用户回一句「令牌准备好了」，agent 就跑这一条，
+    不要让用户自己敲命令。最后打印 SETUP_RESULT 摘要，agent 按它判断。
+    """
+    print("=" * 68)
+    print("金蝶云社区 MCP · 一步接入")
+    print("=" * 68)
+
+    # 本次以 DPAPI 密文为准：环境变量里的旧令牌会让自检测错对象
+    saved_env = {}
+    for name in club_mcp.TOKEN_ENVS:
+        if name in os.environ:
+            saved_env[name] = os.environ.pop(name)
+
+    try:
+        # —— 第 1 步：令牌 ——
+        print("\n[1/3] 令牌")
+        try:
+            token, source = club_mcp.resolve_token()
+            print(f"      已配置（{source}｜{clubstore.mask(token)}），跳过录入窗口。")
+            print("      要重新录入：python setup_token.py --delete 后再跑本命令。")
+        except club_mcp.TokenMissing:
+            print("      正在打开录入窗口 —— 请把令牌粘贴进去，点「测试连接」，再点「保存并关闭」。")
+            code = run_token_wizard()
+            if code == 10:
+                print("      用户取消了，**没有做任何改动**（也没写配置）。")
+                print("SETUP_RESULT code=10 stage=token saved=0 verified=0 installed=0")
+                return EXIT_TOKEN_MISSING
+            if code != 0:
+                print(f"      令牌录入未完成（退出码 {code}），已中止，没有写任何配置。")
+                print(f"SETUP_RESULT code={code} stage=token saved=0 verified=0 installed=0")
+                return code if code in (2, 3, 4) else EXIT_SERVER
+
+        # —— 第 2 步：自检 ——
+        print("\n[2/3] 连接自检")
+        client = club_mcp.McpClient(base_url=base_url, timeout=timeout or club_mcp.DEFAULT_TIMEOUT)
+        try:
+            cmd_verify(client)
+        except club_mcp.ClubError as exc:
+            print(f"      ❌ {exc}")
+            print(f"SETUP_RESULT code={EXIT_BY_KIND.get(exc.kind, EXIT_SERVER)} "
+                  f"stage=verify saved=1 verified=0 installed=0")
+            return EXIT_BY_KIND.get(exc.kind, EXIT_SERVER)
+
+        # —— 第 3 步：接入客户端 ——
+        print("\n[3/3] 写入 MCP 配置")
+        rc = cmd_install_mcp(client_key, dry_run=False)
+        if rc != 0:
+            print(f"SETUP_RESULT code={rc} stage=install saved=1 verified=1 installed=0")
+            return rc
+
+        print("\n" + "=" * 68)
+        print("✅ 令牌已加密保存 · 连接自检通过 · MCP 配置已写入")
+        print("=" * 68)
+        print(f"配置文件：{CLIENTS[client_key]['path']}")
+        print("最后一步需要你点一下：在客户端的「连接器 / MCP」页面找到 kingdee-club，")
+        print("点【信任】或【启用】，然后重启客户端 —— 这一步只有人能做。")
+        print("SETUP_RESULT code=0 stage=ready saved=1 verified=1 installed=1 next=trust_and_restart")
+        return EXIT_OK
+    finally:
+        os.environ.update(saved_env)
+
+
 def cmd_install_mcp(client_key: str, dry_run: bool) -> int:
     meta = CLIENTS[client_key]
     path: Path | None = meta["path"]
@@ -406,6 +499,8 @@ def main() -> int:
     group.add_argument("--call", metavar="TOOL", help="调用一个工具")
     group.add_argument("--mcp-config", action="store_true", help="生成 MCP 配置片段")
     group.add_argument("--install-mcp", action="store_true", help="合并写入 MCP 配置文件")
+    group.add_argument("--setup", action="store_true",
+                       help="一步接入：弹窗录令牌 → 自检 → 写入 MCP 配置（agent 用这个）")
     group.add_argument("--doctor", action="store_true", help="六步体检")
 
     parser.add_argument("--args", default="{}", help="--call 的参数（JSON 对象）")
@@ -426,6 +521,8 @@ def main() -> int:
             return cmd_mcp_config(args.client, args.json)
         if args.install_mcp:
             return cmd_install_mcp(args.client, args.dry_run)
+        if args.setup:
+            return cmd_setup(args.base_url, args.client, args.timeout)
 
         client = club_mcp.McpClient(base_url=args.base_url, timeout=args.timeout or club_mcp.DEFAULT_TIMEOUT)
         if args.verify:

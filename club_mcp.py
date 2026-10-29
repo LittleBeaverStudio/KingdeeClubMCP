@@ -42,7 +42,7 @@ import clubstore
 DEFAULT_BASE_URL = "https://vip.kingdee.com/api/mcp"
 PROTOCOL_VERSION = "2025-06-18"
 CLIENT_NAME = "kingdee-club-skill"
-CLIENT_VERSION = "1.0.1"
+CLIENT_VERSION = "1.0.2"
 USER_AGENT = f"{CLIENT_NAME}/{CLIENT_VERSION} (+https://littlebeaver.top)"
 
 TOKEN_ENVS = ("KINGDEE_CLUB_TOKEN", "KINGDEE_CLUB_PAT")

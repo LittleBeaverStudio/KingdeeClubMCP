@@ -38,6 +38,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import clubstore  # noqa: E402
 
+# 同 club_cli：stdout 是管道时按行刷新，agent 才能实时看到「窗口已打开」与 SETUP_RESULT
+try:
+    sys.stdout.reconfigure(line_buffering=True)
+    sys.stderr.reconfigure(line_buffering=True)
+except (AttributeError, ValueError):
+    pass
+
 EXIT_OK = 0
 EXIT_CANCELLED = 10
 EXIT_BUSY = 12
@@ -46,6 +53,7 @@ EXIT_SAVE_FAILED = 3
 EXIT_NEED_FALLBACK = 4
 
 MIN_TOKEN_LEN = 16
+COMMUNITY_URL = "https://vip.kingdee.com"
 IDLE_TIMEOUT_MS = 20 * 60 * 1000
 LOCK_PATH = clubstore.STORE_DIR / ".club_setup.lock"
 SELF = Path(__file__).resolve()
@@ -173,6 +181,16 @@ def _relaunch(prefix: list[str]) -> int:
 # ───────────────────────────── 图形界面（L0/L1） ─────────────────────────────
 
 def _gui() -> int:
+    """只做一件事：把令牌粘进来。
+
+    界面刻意保持简单：
+    · **只有一个输入框**（令牌），不填服务地址 —— 地址是固定的；
+    · 顺序照着用户找令牌的动线排：**社区网址 → 三步路径 → 令牌输入**；
+    · 底部只有两个按钮（保存 / 取消），挨在一起；
+    · 不单独放「测试连接」按钮 —— 点「保存」时**自动验证**，有问题**用弹窗**提示；
+    · 社区网址可**复制**、也可**一键打开浏览器**，新手能直接去创建令牌；
+    · 不显示状态行 —— 过程反馈走按钮文字，错误一律用弹窗。
+    """
     try:
         import tkinter as tk
         from tkinter import messagebox, ttk
@@ -183,9 +201,7 @@ def _gui() -> int:
     if lock is None:
         return EXIT_BUSY
 
-    state = {"token": None, "done": False, "base_url": ""}
     existing = clubstore.load() or {}
-
     root = tk.Tk()
     root.title("金蝶云社区 · 个人令牌")
     root.resizable(False, False)
@@ -198,89 +214,64 @@ def _gui() -> int:
     outer = ttk.Frame(root, padding=16)
     outer.pack(fill="both", expand=True)
 
-    ttk.Label(outer, text="金蝶云社区个人令牌（PAT）",
+    ttk.Label(outer, text="金蝶云社区 · 个人令牌（PAT）",
               font=("Microsoft YaHei UI", 11, "bold")).pack(anchor="w")
-    ttk.Label(outer, wraplength=520, justify="left", foreground="#555",
-              text=("在 vip.kingdee.com 登录后，到「个人设置 → 访问令牌」创建或复制一个令牌，"
-                    "整串粘贴到下面。令牌会用 Windows 系统加密（DPAPI）保存到\n"
-                    "~/.workbuddy/kingdee/club_token.bin —— 不写明文、不进对话、不进 git，"
-                    "mcp.json 里也不会出现它。")).pack(anchor="w", pady=(6, 12))
+    ttk.Label(outer, justify="left", foreground="#555",
+              text="按下面三步找到令牌，整串粘贴到输入框，保存时自动验证。").pack(
+        anchor="w", pady=(6, 8))
 
+    # —— 社区网址（可复制 / 可一键打开）——
+    site = ttk.Frame(outer)
+    site.pack(fill="x")
+    ttk.Label(site, text="社区网址").grid(row=0, column=0, sticky="w", padx=(0, 8))
+    url_var = tk.StringVar(value=COMMUNITY_URL)
+    url_entry = ttk.Entry(site, textvariable=url_var, state="readonly", width=42)
+    url_entry.grid(row=0, column=1, sticky="we")
+    site.columnconfigure(1, weight=1)
+    ttk.Button(site, text="复制", width=6,
+               command=lambda: copy_url(root, url_var.get())).grid(row=0, column=2, padx=(6, 0))
+    ttk.Button(site, text="打开", width=6,
+               command=lambda: open_community(root, url_var.get())).grid(row=0, column=3, padx=(4, 0))
+
+    # —— 三步路径：新手最缺的就是「令牌在哪」——
+    steps = ttk.Frame(outer)
+    steps.pack(fill="x", pady=(8, 0))
+    for i, text in enumerate(("① 打开个人主页", "② 编辑个人资料", "③ 新建令牌")):
+        ttk.Label(steps, text=text, foreground="#0b5cad").grid(row=0, column=i * 2, sticky="w")
+        if i < 2:
+            ttk.Label(steps, text="→", foreground="#888").grid(row=0, column=i * 2 + 1, padx=6)
+
+    # —— 令牌输入 ——
     form = ttk.Frame(outer)
-    form.pack(fill="x")
+    form.pack(fill="x", pady=(12, 0))
     ttk.Label(form, text="令牌").grid(row=0, column=0, sticky="w", padx=(0, 8))
-
     token_var = tk.StringVar(value="")
-    entry = ttk.Entry(form, textvariable=token_var, show="•", width=52)
+    entry = ttk.Entry(form, textvariable=token_var, show="\u2022", width=42)
     entry.grid(row=0, column=1, sticky="we")
     form.columnconfigure(1, weight=1)
-
-    def toggle_show() -> None:
-        entry.configure(show="" if show_var.get() else "•")
-
     show_var = tk.BooleanVar(value=False)
-    ttk.Checkbutton(form, text="显示", variable=show_var, command=toggle_show).grid(
+    ttk.Checkbutton(form, text="显示", variable=show_var,
+                    command=lambda: entry.configure(show="" if show_var.get() else "\u2022")).grid(
         row=0, column=2, padx=(8, 0))
 
-    ttk.Label(form, text="服务地址").grid(row=1, column=0, sticky="w", pady=(8, 0), padx=(0, 8))
-    url_var = tk.StringVar(value=existing.get("base_url") or "https://vip.kingdee.com/api/mcp")
-    url_entry = ttk.Entry(form, textvariable=url_var, width=52)
-    url_entry.grid(row=1, column=1, sticky="we", pady=(8, 0))
-
-    status_var = tk.StringVar(value=_status_line(existing))
-    status = ttk.Label(outer, textvariable=status_var, wraplength=520, justify="left",
-                       foreground="#1a6d1a")
-    status.pack(anchor="w", pady=(12, 4))
-
+    # —— 两个按钮，排在一起 ——
     buttons = ttk.Frame(outer)
-    buttons.pack(fill="x", pady=(12, 0))
-
+    buttons.pack(fill="x", pady=(16, 0))
     result = {"code": EXIT_CANCELLED}
 
-    def set_status(text: str, ok: bool = True) -> None:
-        status_var.set(text)
-        status.configure(foreground="#1a6d1a" if ok else "#b00020")
+    def set_busy(busy: bool) -> None:
+        """验证中：按钮变文案并禁用。没有状态行，进度靠按钮说。"""
+        save_btn.configure(text="验证中…" if busy else "保存",
+                           state="disabled" if busy else "normal")
+        cancel_btn.configure(state="disabled" if busy else "normal")
 
-    def test_connection() -> None:
-        token = _sanitize(token_var.get())
-        problem = _validate(token)
-        if problem:
-            set_status(problem, ok=False)
-            return
-        set_status("正在连接金蝶云社区…（最长 60 秒）")
-        test_btn.configure(state="disabled")
-
-        # 后台线程只做网络请求，结果经队列回到主线程再碰 Tk —— Tk 不是线程安全的，
-        # 在子线程里直接 root.after / 改控件偶发会崩。
-        results: "queue.Queue[tuple[str, bool]]" = queue.Queue()
-
-        def worker() -> None:
-            results.put(_probe_connection(token, url_var.get().strip()))
-
-        def poll() -> None:
-            try:
-                message, ok = results.get_nowait()
-            except queue.Empty:
-                root.after(120, poll)
-                return
-            set_status(message, ok=ok)
-            test_btn.configure(state="normal")
-
-        threading.Thread(target=worker, daemon=True).start()
-        root.after(120, poll)
-
-    def save() -> None:
-        token = _sanitize(token_var.get())
-        problem = _validate(token)
-        if problem:
-            messagebox.showwarning("令牌不完整", problem, parent=root)
-            return
+    def do_save(token: str) -> None:
+        payload = {"token": token, "saved_at": _now()}
+        old_url = str(existing.get("base_url") or "").strip()
+        if old_url:
+            payload["base_url"] = old_url
         try:
-            clubstore.save({
-                "token": token,
-                "saved_at": _now(),
-                "base_url": url_var.get().strip() or "https://vip.kingdee.com/api/mcp",
-            })
+            clubstore.save(payload)
         except Exception as exc:  # noqa: BLE001
             messagebox.showerror("保存失败", f"{type(exc).__name__}: {exc}", parent=root)
             result["code"] = EXIT_SAVE_FAILED
@@ -288,44 +279,103 @@ def _gui() -> int:
             return
         result["code"] = EXIT_OK
         result["done"] = True
-        messagebox.showinfo("已保存",
-                            f"令牌已加密保存（{clubstore.mask(token)}）。\n\n"
-                            "接下来：运行 python club_cli.py --mcp-config 生成 MCP 配置，"
-                            "粘贴到你的 AI 客户端即可。", parent=root)
+        messagebox.showinfo(
+            "已保存",
+            f"令牌已加密保存（{clubstore.mask(token)}）。\n\n"
+            "接下来由 AI 助手自动完成连接自检与 MCP 配置接入。\n\n"
+            "要删除已保存的令牌：python setup_token.py --delete", parent=root)
         root.destroy()
 
-    def clear_saved() -> None:
-        if not clubstore.exists():
-            set_status("当前没有已保存的令牌。", ok=False)
+    def save() -> None:
+        token = _sanitize(token_var.get())
+        problem = _validate(token)
+        if problem:
+            messagebox.showwarning("令牌不完整", problem, parent=root)
             return
-        if not messagebox.askyesno("清除令牌", "确定删除本机已保存的加密令牌？", parent=root):
-            return
-        clubstore.delete()
-        set_status("已删除 club_token.bin。", ok=False)
+        set_busy(True)
 
-    test_btn = ttk.Button(buttons, text="测试连接", command=test_connection)
-    test_btn.pack(side="left")
-    ttk.Button(buttons, text="保存并关闭", command=save).pack(side="left", padx=8)
-    ttk.Button(buttons, text="清除已保存", command=clear_saved).pack(side="left")
-    ttk.Button(buttons, text="取消", command=root.destroy).pack(side="right")
+        # 后台线程只做网络请求，结果经队列回主线程再碰 Tk —— Tk 不是线程安全的
+        results: "queue.Queue[tuple[str, bool]]" = queue.Queue()
+
+        def worker() -> None:
+            results.put(_probe_connection(token, _default_base_url()))
+
+        def poll() -> None:
+            try:
+                message, ok = results.get_nowait()
+            except queue.Empty:
+                root.after(120, poll)
+                return
+            if ok:
+                do_save(token)
+                return
+            # 验证没过：用弹窗说清楚，由用户决定要不要先存下来
+            set_busy(False)
+            answer = messagebox.askyesno(
+                "令牌验证未通过",
+                f"{message}\n\n仍要保存这个令牌吗？（保存后可以再换）", parent=root)
+            if answer:
+                do_save(token)
+            else:
+                entry.focus_set()
+                entry.select_range(0, "end")
+
+        threading.Thread(target=worker, daemon=True).start()
+        root.after(120, poll)
+
+    save_btn = ttk.Button(buttons, text="保存", command=save)
+    save_btn.pack(side="left")
+    cancel_btn = ttk.Button(buttons, text="取消", command=root.destroy)
+    cancel_btn.pack(side="left", padx=6)
 
     def on_close() -> None:
-        result["code"] = EXIT_OK if result["done"] else EXIT_CANCELLED
+        result["code"] = EXIT_OK if result.get("done") else EXIT_CANCELLED
         root.destroy()
 
     root.protocol("WM_DELETE_WINDOW", on_close)
-    root.after(IDLE_TIMEOUT_MS, lambda: (set_status("空闲超时，已关闭（未保存）。", ok=False),
-                                        root.after(1200, root.destroy)))
     entry.focus_set()
     root.mainloop()
     _release_lock(lock)
+    _print_summary(result["code"], result.get("done"))
     return result["code"]
 
 
-def _status_line(data: dict) -> str:
+def copy_url(root, url: str) -> None:
+    """把社区网址复制到剪贴板（Windows 上写完要 update 才会留在剪贴板里）。"""
+    try:
+        root.clipboard_clear()
+        root.clipboard_append(url)
+        root.update_idletasks()
+        root.update()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def open_community(root, url: str) -> None:
+    """用默认浏览器打开社区首页（用户点了才开）。"""
+    try:
+        import webbrowser
+        webbrowser.open(url)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _default_base_url() -> str:
+    """窗口里不再让用户填地址，统一取默认/环境变量指定的地址。"""
+    return (os.environ.get("KINGDEE_CLUB_MCP_URL") or "https://vip.kingdee.com/api/mcp").strip()
+
+
+def _print_summary(code: int, saved: bool) -> None:
+    """给 agent 看的机器可读摘要（人也能读）。
+
+    格式固定：``SETUP_RESULT code=<退出码> saved=<0|1> hint=<尾号>``
+    —— agent 只需判断这行，不要去解析上面的中文输出。
+    """
+    hint = ""
+    data = clubstore.load() or {}
     if data.get("token"):
-        return f"当前状态：{clubstore.describe(data)}"
-    return "当前状态：未配置令牌（粘贴后点「保存并关闭」）"
+        hint = clubstore.mask(data["token"])
+    print(f"SETUP_RESULT code={code} saved={1 if saved else 0} hint={hint or '-'}")
 
 
 def _probe_connection(token: str, base_url: str) -> tuple[str, bool]:
@@ -363,6 +413,7 @@ def _console() -> int:
             token = _sanitize(getpass.getpass("粘贴令牌: "))
         except (KeyboardInterrupt, EOFError):
             print("\n已取消，未保存。")
+            _print_summary(EXIT_CANCELLED, False)
             return EXIT_CANCELLED
         problem = _validate(token)
         if problem:
@@ -380,6 +431,7 @@ def _console() -> int:
                 return EXIT_CANCELLED
         clubstore.save({"token": token, "saved_at": _now(), "base_url": base_url})
         print(f"✅ 已加密保存（{clubstore.mask(token)}）→ {clubstore.STORE_PATH}")
+        _print_summary(EXIT_OK, True)
         return EXIT_OK
     except Exception as exc:  # noqa: BLE001
         print(f"[!] 保存失败：{type(exc).__name__}: {exc}")
